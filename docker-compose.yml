@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  app:
+    build: .
+    ports:
+      - "8081:8081"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    privileged: true
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    environment:
+      - ANDROID_SDK_ROOT=/opt/android-sdk
+      - ADB_SERVER_SOCKET=tcp:host.docker.internal:5037
+    stdin_open: true
+    tty: true
+    network_mode: host
