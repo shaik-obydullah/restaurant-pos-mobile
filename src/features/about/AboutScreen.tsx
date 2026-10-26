@@ -7,7 +7,7 @@ const AboutScreen = () => {
     <View style={styles.container}>
       <Text style={styles.title}>About</Text>
       <Text style={styles.item}>Developer: Shaik Obydullah</Text>
-      <Text style={styles.item}>Version: 0.0.1</Text>
+      <Text style={styles.item}>Version: 1.0.0</Text>
       <Text style={styles.item}>Website: obydullah.com</Text>
     </View>
   );
