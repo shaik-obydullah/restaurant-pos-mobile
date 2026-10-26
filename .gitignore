@@ -1,2 +1,29 @@
-docs
-node_modules
+# Dependencies
+node_modules/
+
+# Local planning docs and packaged builds
+docs/
+*.apk
+*.aab
+
+# Android build output and local machine files
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+android/.cxx/
+android/app/.cxx/
+android/.kotlin/
+android/local.properties
+android/app/src/main/assets/index.android.bundle
+android/app/src/main/assets/index.android.bundle.map
+
+# iOS
+ios/Pods/
+ios/build/
+
+# IDE, logs, and OS files
+.idea/
+*.iml
+*.log
+.DS_Store
