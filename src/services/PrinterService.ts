@@ -2,7 +2,7 @@ import {PermissionsAndroid, Platform} from 'react-native';
 import {format} from 'date-fns';
 import {Sale, SaleDetail} from '../types';
 import {SettingsRepository} from '../core/database/repositories/SettingsRepository';
-import {humanize} from '../core/utils';
+import {humanize, parseLineExtras} from '../core/utils';
 
 const RECEIPT_WIDTH = 32;
 
@@ -208,6 +208,15 @@ const buildNetworkReceipt = (
     const qty = String(detail.quantity).padStart(3);
     const amount = money(detail.total_price, currencyCode).padStart(13);
     lines.push(`${name}${qty}${amount}`);
+    const extras = parseLineExtras(detail.extras);
+    extras.forEach(extra => {
+      lines.push(
+        `  + ${truncate(extra.name, 16)}${money(extra.price, currencyCode).padStart(11)}`,
+      );
+    });
+    if (detail.cooking_instructions) {
+      lines.push(`  >> ${truncate(detail.cooking_instructions, 28)}`);
+    }
   });
   lines.push('--------------------------------');
   lines.push(line('Subtotal', money(sale.net_price, currencyCode)));
@@ -305,6 +314,19 @@ const printBluetoothReceipt = async (
       ],
       textOptions,
     );
+    if (detail.cooking_instructions) {
+      await B.printText(
+        `  >> ${truncate(detail.cooking_instructions, 28)}\n`,
+        textOptions,
+      );
+    }
+    const extras = parseLineExtras(detail.extras);
+    for (const extra of extras) {
+      await B.printText(
+        `  + ${truncate(extra.name, 18)} ${money(extra.price, currencyCode)}\n`,
+        textOptions,
+      );
+    }
   }
   await B.printText('--------------------------------\n', textOptions);
 

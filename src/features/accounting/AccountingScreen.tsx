@@ -16,10 +16,12 @@ import {Colors} from '../../core/constants';
 import {
   Accounting,
   AccountingRepository,
+  SalesEntry,
   SalesSummary,
 } from '../../core/database/repositories/AccountingRepository';
 import {IconButton} from 'react-native-paper';
 import {useAppStore} from '../../store';
+import {humanize} from '../../core/utils';
 
 const IN_CATEGORIES = ['Sales', 'Investment', 'Loan', 'Other Income'];
 const OUT_CATEGORIES = [
@@ -30,6 +32,31 @@ const OUT_CATEGORIES = [
   'Transport',
   'Other Expense',
 ];
+
+const SOURCE_COLORS = [
+  Colors.primary,
+  Colors.secondary,
+  Colors.info,
+  Colors.success,
+  Colors.warning,
+];
+
+type LedgerItem =
+  | {
+      kind: 'manual';
+      key: string;
+      date: string;
+      entry: Accounting;
+      amount: number;
+      isIn: boolean;
+    }
+  | {
+      kind: 'sale';
+      key: string;
+      date: string;
+      sale: SalesEntry;
+      amount: number;
+    };
 
 type DateFilter = 'all' | 'today' | 'week' | 'month' | 'custom';
 
@@ -44,6 +71,7 @@ const DATE_FILTERS: {key: DateFilter; label: string}[] = [
 const AccountingScreen = () => {
   const {currency} = useAppStore();
   const [entries, setEntries] = useState<Accounting[]>([]);
+  const [salesEntries, setSalesEntries] = useState<SalesEntry[]>([]);
   const [salesSummary, setSalesSummary] = useState<SalesSummary>({
     salesIncome: 0,
     costOfGoods: 0,
@@ -107,6 +135,13 @@ const AccountingScreen = () => {
           }
         })
         .catch(() => {});
+      AccountingRepository.getSalesEntries(range.from, range.to)
+        .then(data => {
+          if (active) {
+            setSalesEntries(data);
+          }
+        })
+        .catch(() => {});
       return () => {
         active = false;
       };
@@ -129,9 +164,63 @@ const AccountingScreen = () => {
     });
   }, [entries, range]);
 
-  const totalIn = filteredEntries.reduce((sum, entry) => sum + (entry.in_amount || 0), 0);
-  const totalOut = filteredEntries.reduce((sum, entry) => sum + (entry.out_amount || 0), 0);
-  const balance = totalIn - totalOut;
+  const manualIn = filteredEntries.reduce(
+    (sum, entry) => sum + (entry.in_amount || 0),
+    0,
+  );
+  const manualOut = filteredEntries.reduce(
+    (sum, entry) => sum + (entry.out_amount || 0),
+    0,
+  );
+  const incomeSources = useMemo(() => {
+    const totals = new Map<string, number>();
+    filteredEntries.forEach(entry => {
+      const amount = entry.in_amount || 0;
+      if (amount <= 0) {
+        return;
+      }
+      const label = entry.category || 'Other Income';
+      totals.set(label, (totals.get(label) || 0) + amount);
+    });
+    if (salesSummary.salesIncome > 0) {
+      totals.set(
+        'Order sales',
+        (totals.get('Order sales') || 0) + salesSummary.salesIncome,
+      );
+    }
+    return Array.from(totals.entries())
+      .map(([label, amount]) => ({label, amount}))
+      .sort((a, b) => b.amount - a.amount);
+  }, [filteredEntries, salesSummary.salesIncome]);
+
+  const totalIncome = incomeSources.reduce(
+    (sum, source) => sum + source.amount,
+    0,
+  );
+
+  const ledger = useMemo<LedgerItem[]>(() => {
+    const manualItems: LedgerItem[] = filteredEntries.map(entry => {
+      const isIn = (entry.in_amount || 0) > 0;
+      return {
+        kind: 'manual',
+        key: `manual-${entry.id}`,
+        date: entry.created_at || '',
+        entry,
+        amount: isIn ? entry.in_amount || 0 : entry.out_amount || 0,
+        isIn,
+      };
+    });
+    const salesItems: LedgerItem[] = salesEntries.map(sale => ({
+      kind: 'sale',
+      key: `sale-${sale.id}`,
+      date: sale.created_at || '',
+      sale,
+      amount: sale.net_price || 0,
+    }));
+    return [...manualItems, ...salesItems].sort((a, b) =>
+      b.date.localeCompare(a.date),
+    );
+  }, [filteredEntries, salesEntries]);
 
   const grossProfit = salesSummary.salesIncome - salesSummary.costOfGoods;
 
@@ -296,25 +385,27 @@ const AccountingScreen = () => {
         })}
       </ScrollView>
 
-      <Text style={styles.periodLabel}>Manual ledger · {periodLabel}</Text>
+      <Text style={styles.periodLabel}>
+        Manual ledger + completed sales · {periodLabel}
+      </Text>
 
       <View style={styles.summaryRow}>
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryLabel}>In</Text>
+          <Text style={styles.summaryLabel}>Manual In</Text>
           <Text style={[styles.summaryValue, styles.inText]}>
-            {currency.symbol}{totalIn.toFixed(2)}
+            {currency.symbol}{manualIn.toFixed(2)}
           </Text>
         </View>
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryLabel}>Out</Text>
+          <Text style={styles.summaryLabel}>Manual Out</Text>
           <Text style={[styles.summaryValue, styles.outText]}>
-            {currency.symbol}{totalOut.toFixed(2)}
+            {currency.symbol}{manualOut.toFixed(2)}
           </Text>
         </View>
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryLabel}>Balance</Text>
+          <Text style={styles.summaryLabel}>Manual Balance</Text>
           <Text style={styles.summaryValue}>
-            {currency.symbol}{balance.toFixed(2)}
+            {currency.symbol}{(manualIn - manualOut).toFixed(2)}
           </Text>
         </View>
       </View>
@@ -347,24 +438,107 @@ const AccountingScreen = () => {
         </View>
       </View>
 
+      <View style={styles.sourcesCard}>
+        <Text style={styles.salesTitle}>Income sources · {periodLabel}</Text>
+        {incomeSources.length === 0 ? (
+          <Text style={styles.sourcesEmpty}>No income recorded in this period</Text>
+        ) : (
+          incomeSources.map((source, index) => {
+            const percent =
+              totalIncome > 0 ? (source.amount / totalIncome) * 100 : 0;
+            return (
+              <View key={source.label} style={styles.sourceRow}>
+                <View style={styles.sourceHeader}>
+                  <Text style={styles.sourceLabel}>{source.label}</Text>
+                  <Text style={styles.sourceAmount}>
+                    {currency.symbol}{source.amount.toFixed(2)}
+                    <Text style={styles.sourcePercent}>
+                      {'  '}{percent.toFixed(0)}%
+                    </Text>
+                  </Text>
+                </View>
+                <View style={styles.sourceBarTrack}>
+                  <View
+                    style={[
+                      styles.sourceBarFill,
+                      {
+                        width: `${percent}%`,
+                        backgroundColor: SOURCE_COLORS[index % SOURCE_COLORS.length],
+                      },
+                    ]}
+                  />
+                </View>
+              </View>
+            );
+          })
+        )}
+        {incomeSources.length > 0 && (
+          <View style={styles.sourceTotalRow}>
+            <Text style={styles.sourceTotalLabel}>Total income</Text>
+            <Text style={styles.sourceTotalValue}>
+              {currency.symbol}{totalIncome.toFixed(2)}
+            </Text>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.entriesHeader}>
+        <Text style={styles.entriesTitle}>Entries · {periodLabel}</Text>
+        <Text style={styles.entriesCount}>{ledger.length}</Text>
+      </View>
+
       <FlatList
-        data={filteredEntries}
-        keyExtractor={item => item.id.toString()}
+        style={styles.entriesList}
+        data={ledger}
+        keyExtractor={item => item.key}
         renderItem={({item}) => {
-          const isIn = (item.in_amount || 0) > 0;
-          const value = isIn ? item.in_amount || 0 : item.out_amount || 0;
+          if (item.kind === 'sale') {
+            const sale = item.sale;
+            const itemLabel =
+              sale.item_quantity === 1 ? '1 item' : `${sale.item_quantity} items`;
+            return (
+              <View style={styles.item}>
+                <View style={styles.itemInfo}>
+                  <Text style={styles.itemText}>
+                    Order #{sale.id} · {humanize(sale.sale_type)}
+                  </Text>
+                  <View style={styles.metaRow}>
+                    <Text style={styles.saleTag}>Order Sale</Text>
+                    <Text style={styles.subText}>
+                      {humanize(sale.payment_method)} · {itemLabel} ·{' '}
+                      {sale.created_at?.slice(0, 16)}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.itemRight}>
+                  <Text style={[styles.amount, styles.inText]}>
+                    +{currency.symbol}{item.amount.toFixed(2)}
+                  </Text>
+                  <Text style={styles.netHint}>net</Text>
+                </View>
+              </View>
+            );
+          }
+
           return (
             <View style={styles.item}>
               <View style={styles.itemInfo}>
-                <Text style={styles.itemText}>{item.description || 'No description'}</Text>
+                <Text style={styles.itemText}>
+                  {item.entry.description || 'No description'}
+                </Text>
                 <View style={styles.metaRow}>
-                  <Text style={styles.categoryTag}>{item.category || 'Uncategorized'}</Text>
-                  <Text style={styles.subText}>{item.created_at?.slice(0, 16)}</Text>
+                  <Text style={styles.categoryTag}>
+                    {item.entry.category || 'Uncategorized'}
+                  </Text>
+                  <Text style={styles.subText}>
+                    {item.entry.created_at?.slice(0, 16)}
+                  </Text>
                 </View>
               </View>
               <View style={styles.itemRight}>
-                <Text style={[styles.amount, isIn ? styles.inText : styles.outText]}>
-                  {isIn ? '+' : '-'}{currency.symbol}{value.toFixed(2)}
+                <Text
+                  style={[styles.amount, item.isIn ? styles.inText : styles.outText]}>
+                  {item.isIn ? '+' : '-'}{currency.symbol}{item.amount.toFixed(2)}
                 </Text>
                 <View style={styles.actions}>
                   <IconButton
@@ -372,14 +546,14 @@ const AccountingScreen = () => {
                     size={18}
                     iconColor={Colors.primary}
                     style={styles.rowAction}
-                    onPress={() => openEditModal(item)}
+                    onPress={() => openEditModal(item.entry)}
                   />
                   <IconButton
                     icon="delete"
                     size={18}
                     iconColor={Colors.error}
                     style={styles.rowAction}
-                    onPress={() => confirmDelete(item)}
+                    onPress={() => confirmDelete(item.entry)}
                   />
                 </View>
               </View>
@@ -388,8 +562,8 @@ const AccountingScreen = () => {
         }}
         ListEmptyComponent={
           <Text style={styles.empty}>
-            {entries.length === 0
-              ? 'No accounting entries yet'
+            {entries.length === 0 && salesEntries.length === 0
+              ? 'No entries yet. Completed sales and manual entries will appear here.'
               : 'No entries in this period'}
           </Text>
         }
@@ -606,6 +780,102 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     color: Colors.text,
+  },
+  sourcesCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+  },
+  sourcesEmpty: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    paddingVertical: 4,
+  },
+  sourceRow: {
+    marginBottom: 8,
+  },
+  sourceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  sourceLabel: {
+    fontSize: 13,
+    color: Colors.text,
+    flex: 1,
+  },
+  sourceAmount: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: Colors.text,
+  },
+  sourcePercent: {
+    fontSize: 11,
+    fontWeight: 'normal',
+    color: Colors.textSecondary,
+  },
+  sourceBarTrack: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: Colors.background,
+    overflow: 'hidden',
+  },
+  sourceBarFill: {
+    height: 5,
+    borderRadius: 3,
+  },
+  sourceTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    marginTop: 4,
+    paddingTop: 8,
+  },
+  sourceTotalLabel: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: Colors.text,
+  },
+  sourceTotalValue: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: Colors.primary,
+  },
+  entriesHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  entriesTitle: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  entriesCount: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: Colors.primary,
+  },
+  entriesList: {
+    flex: 1,
+  },
+  saleTag: {
+    fontSize: 11,
+    color: Colors.surface,
+    backgroundColor: Colors.primary,
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    overflow: 'hidden',
+  },
+  netHint: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    marginTop: 2,
   },
   inText: {
     color: Colors.success,

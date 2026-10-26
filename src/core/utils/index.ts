@@ -1,4 +1,5 @@
 import {DEFAULT_CURRENCY} from '../constants/currencies';
+import {LineExtra} from '../../types';
 
 // Pure-JS RFC4122 v4 UUID generator.
 // The `uuid` package relies on crypto.getRandomValues(), which is not
@@ -36,4 +37,45 @@ export const formatDate = (date: string | Date): string => {
 export const formatDateTime = (date: string | Date): string => {
   const d = typeof date === 'string' ? new Date(date) : date;
   return d.toLocaleString('en-GB');
+};
+
+// Split a comma/newline separated ingredient string, trimming blanks and duplicates.
+export const parseIngredientList = (value?: string | null): string[] => {
+  if (!value) {
+    return [];
+  }
+  return value
+    .split(/[,\n]/)
+    .map(item => item.trim())
+    .filter(
+      (item, index, all) =>
+        !!item &&
+        all.findIndex(other => other.toLowerCase() === item.toLowerCase()) === index,
+    );
+};
+
+// Render ingredients consistently, e.g. "Cream · Oreo sprinkles · Chocolate sauce".
+export const formatIngredientList = (value?: string | null): string =>
+  parseIngredientList(value).join(' · ');
+
+// Parse the JSON snapshot of paid extras stored on a cart line or sale detail.
+export const parseLineExtras = (value?: string | null): LineExtra[] => {
+  if (!value) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter(item => item && typeof item.name === 'string')
+      .map(item => ({
+        id: typeof item.id === 'number' ? item.id : undefined,
+        name: item.name,
+        price: Number(item.price) || 0,
+      }));
+  } catch {
+    return [];
+  }
 };

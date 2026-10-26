@@ -1,5 +1,5 @@
 import React, {useEffect, useState} from 'react';
-import {View, Text, FlatList, StyleSheet, TouchableOpacity, Alert, Modal, TextInput} from 'react-native';
+import {View, Text, FlatList, StyleSheet, TouchableOpacity, Alert, Modal, TextInput, ScrollView} from 'react-native';
 import {Colors} from '../../core/constants';
 import {humanize} from '../../core/utils';
 import {StockRepository} from '../../core/database/repositories/StockRepository';
@@ -22,6 +22,10 @@ const StockScreen = () => {
   const [buyPrice, setBuyPrice] = useState('');
   const [salePrice, setSalePrice] = useState('');
   const [initialQty, setInitialQty] = useState('');
+  const [addInstruction, setAddInstruction] = useState('');
+  const [instructionDraft, setInstructionDraft] = useState('');
+  const [activeDraft, setActiveDraft] = useState(true);
+  const [stockFilter, setStockFilter] = useState<'active' | 'inactive' | 'all'>('active');
 
   const loadStocks = async () => {
     const [stockData, prodData] = await Promise.all([
@@ -36,9 +40,7 @@ const StockScreen = () => {
     loadStocks();
   }, []);
 
-  const productsWithoutStock = products.filter(
-    p => !stocks.some(s => s.product_id === p.id),
-  );
+  const activeProducts = products.filter(p => p.status === 'active');
 
   const getProductName = (productId: number) => {
     return products.find(p => p.id === productId)?.name || `Product ${productId}`;
@@ -48,6 +50,8 @@ const StockScreen = () => {
     setSelectedStock(stock);
     setAdjustmentType('increase');
     setAdjustQty('');
+    setInstructionDraft(stock.cooking_instructions || '');
+    setActiveDraft(stock.is_active !== 0);
     setAdjustVisible(true);
   };
 
@@ -55,51 +59,82 @@ const StockScreen = () => {
     setAdjustVisible(false);
     setSelectedStock(null);
     setAdjustQty('');
+    setInstructionDraft('');
   };
 
   const handleAdjust = async () => {
     if (!selectedStock) {
       return;
     }
-    const qty = parseInt(adjustQty);
-    if (isNaN(qty) || qty <= 0) {
+    const qtyText = adjustQty.trim();
+    const hasQty = qtyText.length > 0;
+    const qty = hasQty ? parseInt(qtyText, 10) : 0;
+    if (hasQty && (isNaN(qty) || qty <= 0)) {
       Alert.alert('Error', 'Enter a valid quantity');
       return;
     }
+
+    const instruction = instructionDraft.trim();
+    const currentInstruction = selectedStock.cooking_instructions || '';
+    const currentActive = selectedStock.is_active !== 0;
+    if (
+      !hasQty &&
+      instruction === currentInstruction &&
+      activeDraft === currentActive
+    ) {
+      Alert.alert(
+        'Error',
+        'Enter a quantity, change the instruction, or change the status',
+      );
+      return;
+    }
+
     const newQty =
       adjustmentType === 'increase'
         ? selectedStock.quantity + qty
         : selectedStock.quantity - qty;
-    if (newQty < 0) {
+    if (hasQty && newQty < 0) {
       Alert.alert('Error', 'Insufficient stock');
       return;
     }
     try {
-      await StockRepository.updateQuantity(selectedStock.id, newQty);
-      await StockAdjustmentRepository.create({
-        stock_id: selectedStock.id,
-        adjustment_type: adjustmentType,
-        quantity: qty,
-        note: undefined,
-        sync_status: 'pending',
-      });
-      Alert.alert('Success', 'Stock adjusted successfully');
+      if (hasQty) {
+        await StockRepository.updateQuantity(selectedStock.id, newQty);
+        await StockAdjustmentRepository.create({
+          stock_id: selectedStock.id,
+          adjustment_type: adjustmentType,
+          quantity: qty,
+          note: undefined,
+          sync_status: 'pending',
+        });
+      }
+      if (instruction !== currentInstruction) {
+        await StockRepository.updateCookingInstructions(
+          selectedStock.id,
+          instruction || null,
+        );
+      }
+      if (activeDraft !== currentActive) {
+        await StockRepository.setActive(selectedStock.id, activeDraft);
+      }
+      Alert.alert('Success', 'Stock updated successfully');
       closeAdjustModal();
       loadStocks();
     } catch (error) {
-      Alert.alert('Error', 'Failed to adjust stock');
+      Alert.alert('Error', 'Failed to update stock');
     }
   };
 
   const openAddModal = () => {
-    if (productsWithoutStock.length === 0) {
-      Alert.alert('No Products Available', 'All products already have a stock record.');
+    if (activeProducts.length === 0) {
+      Alert.alert('No Products Available', 'Create a product first.');
       return;
     }
-    setSelectedProductId(productsWithoutStock[0].id);
+    setSelectedProductId(activeProducts[0].id);
     setBuyPrice('');
     setSalePrice('');
     setInitialQty('');
+    setAddInstruction('');
     setAddVisible(true);
   };
 
@@ -109,6 +144,7 @@ const StockScreen = () => {
     setBuyPrice('');
     setSalePrice('');
     setInitialQty('');
+    setAddInstruction('');
   };
 
   const handleAdd = async () => {
@@ -137,17 +173,13 @@ const StockScreen = () => {
       parsedQty <= 0 ? 'outStock' : parsedQty < 10 ? 'lowStock' : 'inStock';
 
     try {
-      const existing = await StockRepository.getByProductId(selectedProductId);
-      if (existing) {
-        Alert.alert('Error', 'This product already has a stock record');
-        return;
-      }
       await StockRepository.create({
         product_id: selectedProductId,
         net_cost: parsedBuyPrice,
         sale_cost: parsedPrice,
         quantity: parsedQty,
         status: stockStatus,
+        cooking_instructions: addInstruction.trim() || undefined,
         sync_status: 'pending',
         updated_at: undefined,
       } as any);
@@ -159,7 +191,20 @@ const StockScreen = () => {
     }
   };
 
-  const lowStock = stocks.filter(s => s.status === 'lowStock' || s.status === 'outStock');
+  const lowStock = stocks.filter(
+    s =>
+      s.is_active !== 0 &&
+      (s.status === 'lowStock' || s.status === 'outStock'),
+  );
+  const filteredStocks = stocks.filter(s => {
+    if (stockFilter === 'active') {
+      return s.is_active !== 0;
+    }
+    if (stockFilter === 'inactive') {
+      return s.is_active === 0;
+    }
+    return true;
+  });
 
   return (
     <View style={styles.container}>
@@ -169,29 +214,54 @@ const StockScreen = () => {
       </View>
       {lowStock.length > 0 && (
         <View style={styles.alertBox}>
-          <Text style={styles.alertText}>⚠️ {lowStock.length} item(s) low/out of stock</Text>
+          <Text style={styles.alertText}>⚠️ {lowStock.length} active item(s) low/out of stock</Text>
         </View>
       )}
+      <View style={styles.filterRow}>
+        {(['active', 'inactive', 'all'] as const).map(f => (
+          <TouchableOpacity
+            key={f}
+            style={[styles.filterBtn, stockFilter === f && styles.filterBtnActive]}
+            onPress={() => setStockFilter(f)}>
+            <Text style={[styles.filterText, stockFilter === f && styles.filterTextActive]}>
+              {humanize(f)}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
       <FlatList
-        data={stocks}
+        data={filteredStocks}
         keyExtractor={item => item.id.toString()}
         renderItem={({item}) => (
-          <TouchableOpacity style={styles.item} onPress={() => openAdjustModal(item)}>
+          <TouchableOpacity
+            style={[styles.item, item.is_active === 0 && styles.itemInactive]}
+            onPress={() => openAdjustModal(item)}>
             <View style={styles.itemInfo}>
               <Text style={styles.itemText}>{getProductName(item.product_id)}</Text>
               <Text style={styles.subText}>
                 Buy: {currency.symbol}{item.net_cost.toFixed(2)} · Sale: {currency.symbol}{item.sale_cost.toFixed(2)}
               </Text>
+              <Text style={styles.batchText}>Stock batch #{item.id}</Text>
+              {!!item.cooking_instructions && (
+                <Text style={styles.instructionText}>🍳 {item.cooking_instructions}</Text>
+              )}
             </View>
             <View style={styles.right}>
               <Text style={styles.qty}>{item.quantity}</Text>
               <Text style={[styles.status, item.status === 'outStock' && styles.outStock, item.status === 'lowStock' && styles.lowStock]}>
                 {humanize(item.status)}
               </Text>
+              {item.is_active === 0 && (
+                <Text style={styles.inactiveBadge}>Inactive</Text>
+              )}
             </View>
           </TouchableOpacity>
         )}
-        ListEmptyComponent={<Text style={styles.empty}>No stock records found</Text>}
+        ListEmptyComponent={
+            <Text style={styles.empty}>
+              No {stockFilter === 'all' ? '' : `${stockFilter} `}stock records found
+            </Text>
+        }
       />
 
       <Modal visible={adjustVisible} animationType="slide" transparent={true}>
@@ -221,11 +291,39 @@ const StockScreen = () => {
             <Text style={styles.label}>Quantity</Text>
             <TextInput
               style={styles.input}
-              placeholder="0"
+              placeholder="0 (leave blank to only edit instruction)"
               value={adjustQty}
               onChangeText={setAdjustQty}
               keyboardType="numeric"
             />
+            <Text style={styles.label}>Special Cooking Instruction</Text>
+            <TextInput
+              style={[styles.input, styles.multilineInput]}
+              placeholder="e.g. No onion, extra spicy"
+              value={instructionDraft}
+              onChangeText={setInstructionDraft}
+              multiline
+            />
+            <Text style={styles.label}>Status</Text>
+            <View style={styles.typeRow}>
+              <TouchableOpacity
+                style={[styles.typeBtn, activeDraft && styles.typeBtnActive]}
+                onPress={() => setActiveDraft(true)}>
+                <Text style={[styles.typeBtnText, activeDraft && styles.typeBtnTextActive]}>
+                  Active
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.typeBtn, !activeDraft && styles.typeBtnInactive]}
+                onPress={() => setActiveDraft(false)}>
+                <Text style={[styles.typeBtnText, !activeDraft && styles.typeBtnTextActive]}>
+                  Inactive
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.statusHint}>
+              Inactive batches stay in stock but are hidden in POS.
+            </Text>
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.cancelButton} onPress={closeAdjustModal}>
                 <Text style={styles.cancelButtonText}>Cancel</Text>
@@ -241,44 +339,60 @@ const StockScreen = () => {
       <Modal visible={addVisible} animationType="slide" transparent={true}>
         <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Add Stock</Text>
-            <Text style={styles.label}>Product</Text>
-            <View style={styles.productRow}>
-              {productsWithoutStock.map(product => (
-                <TouchableOpacity
-                  key={product.id}
-                  style={[styles.productChip, selectedProductId === product.id && styles.productChipActive]}
-                  onPress={() => setSelectedProductId(product.id)}>
-                  <Text style={[styles.productChipText, selectedProductId === product.id && styles.productChipTextActive]}>
-                    {product.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text style={styles.label}>Buy Price</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="0.00"
-              value={buyPrice}
-              onChangeText={setBuyPrice}
-              keyboardType="numeric"
-            />
-            <Text style={styles.label}>Sale Price</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="0.00"
-              value={salePrice}
-              onChangeText={setSalePrice}
-              keyboardType="numeric"
-            />
-            <Text style={styles.label}>Quantity</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="0"
-              value={initialQty}
-              onChangeText={setInitialQty}
-              keyboardType="numeric"
-            />
+            <Text style={styles.modalTitle}>Add Stock / Batch</Text>
+            <Text style={styles.modalHint}>
+              Add a separate entry for each delivery with its own buy and sale price.
+            </Text>
+            <ScrollView
+              style={styles.modalScroll}
+              contentContainerStyle={styles.modalScrollContent}
+              keyboardShouldPersistTaps="handled">
+              <Text style={styles.label}>Product</Text>
+              <View style={styles.productRow}>
+                {activeProducts.map(product => (
+                  <TouchableOpacity
+                    key={product.id}
+                    style={[styles.productChip, selectedProductId === product.id && styles.productChipActive]}
+                    onPress={() => setSelectedProductId(product.id)}>
+                    <Text style={[styles.productChipText, selectedProductId === product.id && styles.productChipTextActive]}>
+                      {product.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={styles.label}>Buy Price</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="0.00"
+                value={buyPrice}
+                onChangeText={setBuyPrice}
+                keyboardType="numeric"
+              />
+              <Text style={styles.label}>Sale Price</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="0.00"
+                value={salePrice}
+                onChangeText={setSalePrice}
+                keyboardType="numeric"
+              />
+              <Text style={styles.label}>Quantity</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="0"
+                value={initialQty}
+                onChangeText={setInitialQty}
+                keyboardType="numeric"
+              />
+              <Text style={styles.label}>Special Cooking Instruction</Text>
+              <TextInput
+                style={[styles.input, styles.multilineInput]}
+                placeholder="e.g. No onion, extra spicy"
+                value={addInstruction}
+                onChangeText={setAddInstruction}
+                multiline
+              />
+            </ScrollView>
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.cancelButton} onPress={closeAddModal}>
                 <Text style={styles.cancelButtonText}>Cancel</Text>
@@ -323,6 +437,32 @@ const styles = StyleSheet.create({
     color: '#856404',
     fontWeight: 'bold',
   },
+  filterRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 12,
+  },
+  filterBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+  },
+  filterBtnActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  filterText: {
+    fontSize: 13,
+    color: Colors.text,
+  },
+  filterTextActive: {
+    color: Colors.surface,
+    fontWeight: 'bold',
+  },
   item: {
     backgroundColor: Colors.surface,
     padding: 16,
@@ -331,6 +471,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  itemInactive: {
+    opacity: 0.55,
   },
   itemInfo: {
     flex: 1,
@@ -342,6 +485,16 @@ const styles = StyleSheet.create({
   subText: {
     fontSize: 14,
     color: Colors.textSecondary,
+  },
+  instructionText: {
+    fontSize: 12,
+    color: Colors.primary,
+    marginTop: 2,
+  },
+  batchText: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    marginTop: 1,
   },
   right: {
     alignItems: 'flex-end',
@@ -362,6 +515,12 @@ const styles = StyleSheet.create({
   outStock: {
     color: Colors.error,
   },
+  inactiveBadge: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: Colors.error,
+    marginTop: 2,
+  },
   empty: {
     textAlign: 'center',
     marginTop: 40,
@@ -379,6 +538,14 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     width: '90%',
     maxWidth: 400,
+    maxHeight: '85%',
+  },
+  modalScroll: {
+    flexGrow: 0,
+    flexShrink: 1,
+  },
+  modalScrollContent: {
+    paddingBottom: 4,
   },
   modalTitle: {
     fontSize: 20,
@@ -389,6 +556,11 @@ const styles = StyleSheet.create({
   modalSubtitle: {
     fontSize: 16,
     color: Colors.text,
+    marginBottom: 8,
+  },
+  modalHint: {
+    fontSize: 12,
+    color: Colors.textSecondary,
     marginBottom: 8,
   },
   currentQty: {
@@ -412,6 +584,15 @@ const styles = StyleSheet.create({
   typeBtnActive: {
     backgroundColor: Colors.primary,
     borderColor: Colors.primary,
+  },
+  typeBtnInactive: {
+    backgroundColor: Colors.error,
+    borderColor: Colors.error,
+  },
+  statusHint: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginBottom: 8,
   },
   typeBtnText: {
     color: Colors.text,
@@ -456,6 +637,10 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 12,
     fontSize: 16,
+  },
+  multilineInput: {
+    minHeight: 60,
+    textAlignVertical: 'top',
   },
   modalActions: {
     flexDirection: 'row',

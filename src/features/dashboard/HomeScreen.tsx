@@ -35,7 +35,11 @@ const HomeScreen = ({navigation}: any) => {
     setCustomersCount(customers.length);
 
     const stocks = await StockRepository.getAll();
-    const low = stocks.filter(s => s.status === 'lowStock' || s.status === 'outStock').length;
+    const low = stocks.filter(
+      s =>
+        s.is_active !== 0 &&
+        (s.status === 'lowStock' || s.status === 'outStock'),
+    ).length;
     setLowStockCount(low);
   };
 

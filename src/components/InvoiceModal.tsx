@@ -13,7 +13,7 @@ import {format} from 'date-fns';
 import {Colors} from '../core/constants';
 import {SettingsRepository} from '../core/database/repositories/SettingsRepository';
 import {Sale, SaleDetail} from '../types';
-import {humanize} from '../core/utils';
+import {humanize, parseLineExtras} from '../core/utils';
 import {printInvoice} from '../services/PrinterService';
 
 interface InvoiceModalProps {
@@ -193,18 +193,33 @@ const InvoiceModal = ({
                 <Text style={[styles.tableHeaderText, styles.amountColumn]}>Amount</Text>
               </View>
 
-              {details.map(detail => (
-                <View key={detail.id} style={styles.itemRow}>
-                  <View style={styles.itemColumn}>
-                    <Text style={styles.itemName}>{detail.product_name}</Text>
-                    <Text style={styles.itemUnit}>{amount(detail.unit_price)} each</Text>
+              {details.map(detail => {
+                const extras = parseLineExtras(detail.extras);
+                return (
+                  <View key={detail.id} style={styles.itemRow}>
+                    <View style={styles.itemColumn}>
+                      <Text style={styles.itemName}>{detail.product_name}</Text>
+                      <Text style={styles.itemUnit}>{amount(detail.unit_price)} each</Text>
+                      {extras.length > 0 && (
+                        <Text style={styles.itemExtras}>
+                          {extras
+                            .map(extra => `${extra.name} +${amount(extra.price)}`)
+                            .join(' · ')}
+                        </Text>
+                      )}
+                      {!!detail.cooking_instructions && (
+                        <Text style={styles.itemInstruction}>
+                          📝 {detail.cooking_instructions}
+                        </Text>
+                      )}
+                    </View>
+                    <Text style={[styles.itemText, styles.qtyColumn]}>{detail.quantity}</Text>
+                    <Text style={[styles.itemText, styles.amountColumn]}>
+                      {amount(detail.total_price)}
+                    </Text>
                   </View>
-                  <Text style={[styles.itemText, styles.qtyColumn]}>{detail.quantity}</Text>
-                  <Text style={[styles.itemText, styles.amountColumn]}>
-                    {amount(detail.total_price)}
-                  </Text>
-                </View>
-              ))}
+                );
+              })}
 
               <View style={styles.dashedDivider} />
 
@@ -412,6 +427,17 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.textSecondary,
     marginTop: 2,
+  },
+  itemInstruction: {
+    fontSize: 11,
+    color: Colors.primary,
+    marginTop: 2,
+  },
+  itemExtras: {
+    fontSize: 11,
+    color: Colors.secondary,
+    marginTop: 2,
+    fontWeight: 'bold',
   },
   itemText: {
     fontSize: 13,

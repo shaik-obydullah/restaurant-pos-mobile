@@ -16,6 +16,20 @@ export interface SalesSummary {
   costOfGoods: number;
 }
 
+export interface SalesEntry {
+  id: number;
+  created_at: string;
+  net_price: number;
+  grand_total: number;
+  vat_amount: number;
+  tax_amount: number;
+  discount_amount: number;
+  sale_type: string;
+  payment_method: string;
+  item_count: number;
+  item_quantity: number;
+}
+
 export class AccountingRepository {
   static async getAll(): Promise<Accounting[]> {
     const db = await getDBConnection();
@@ -61,6 +75,46 @@ export class AccountingRepository {
   static async delete(id: number): Promise<void> {
     const db = await getDBConnection();
     await db.executeSql('DELETE FROM accounting WHERE id = ?', [id]);
+  }
+
+  static async getSalesEntries(from?: string, to?: string): Promise<SalesEntry[]> {
+    const db = await getDBConnection();
+    const conditions = ["s.status = 'completed'"];
+    const params: string[] = [];
+
+    if (from) {
+      conditions.push('date(s.created_at) >= date(?)');
+      params.push(from);
+    }
+    if (to) {
+      conditions.push('date(s.created_at) <= date(?)');
+      params.push(to);
+    }
+
+    const [results] = await db.executeSql(
+      `SELECT
+         s.id,
+         s.created_at,
+         s.net_price,
+         s.grand_total,
+         s.vat_amount,
+         s.tax_amount,
+         s.discount_amount,
+         s.sale_type,
+         s.payment_method,
+         (SELECT COUNT(*) FROM sale_details sd WHERE sd.sale_id = s.id) AS item_count,
+         (SELECT COALESCE(SUM(sd.quantity), 0) FROM sale_details sd WHERE sd.sale_id = s.id) AS item_quantity
+       FROM sales s
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY s.created_at DESC`,
+      params,
+    );
+
+    const entries: SalesEntry[] = [];
+    for (let i = 0; i < results.rows.length; i++) {
+      entries.push(results.rows.item(i));
+    }
+    return entries;
   }
 
   static async getSalesSummary(from?: string, to?: string): Promise<SalesSummary> {

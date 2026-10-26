@@ -20,8 +20,9 @@ export class SaleDetailRepository {
     const [result] = await db.executeSql(
       `INSERT INTO sale_details (
         server_id, sale_id, product_id, stock_id, product_name,
-        quantity, unit_price, total_price, unit_cost, sync_status, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime("now"))`,
+        quantity, unit_price, total_price, unit_cost, base_price, extras,
+        removed_ingredients, cooking_instructions, sync_status, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime("now"))`,
       [
         detail.server_id || null,
         detail.sale_id,
@@ -32,6 +33,10 @@ export class SaleDetailRepository {
         detail.unit_price,
         detail.total_price,
         detail.unit_cost,
+        detail.base_price ?? detail.unit_price,
+        detail.extras || null,
+        detail.removed_ingredients || null,
+        detail.cooking_instructions || null,
         detail.sync_status,
       ],
     );

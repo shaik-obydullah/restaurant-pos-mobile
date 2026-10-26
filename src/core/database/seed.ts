@@ -61,10 +61,16 @@ export const seedDemoData = async () => {
     } as any);
 
     // Chips
-    const addProduct = async (name: string, categoryId: number, price: number) => {
+    const addProduct = async (
+      name: string,
+      categoryId: number,
+      price: number,
+      ingredients?: string,
+    ) => {
       const productId = await ProductRepository.create({
         name,
         category_id: categoryId,
+        ingredients,
         status: 'active',
         sync_status: 'synced',
         created_at: '',
@@ -99,7 +105,12 @@ export const seedDemoData = async () => {
     await addProduct('Banana Milkshake', milkshakesCat, 4.99);
     await addProduct('Snickers Milkshake', milkshakesCat, 4.99);
     await addProduct('Mango Milkshake', milkshakesCat, 4.99);
-    await addProduct('Oreo Milkshake', milkshakesCat, 4.99);
+    await addProduct(
+      'Oreo Milkshake',
+      milkshakesCat,
+      4.99,
+      'Cream, Oreo sprinkles, Chocolate sauce',
+    );
     await addProduct('Add Whipped Cream', milkshakesCat, 0.99);
 
     // Soft Drinks

@@ -20,11 +20,24 @@ CREATE TABLE IF NOT EXISTS products (
     name TEXT NOT NULL UNIQUE,
     category_id INTEGER NOT NULL,
     image TEXT DEFAULT NULL,
+    ingredients TEXT DEFAULT NULL,
     status TEXT CHECK(status IN ('active', 'inactive')) DEFAULT 'active',
     sync_status TEXT CHECK(sync_status IN ('synced', 'pending', 'failed')) DEFAULT 'synced',
     created_at DATETIME NOT NULL DEFAULT (datetime('now')),
     updated_at DATETIME DEFAULT NULL,
     FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT
+);
+
+-- Product Options Table (paid extras / add-ons)
+CREATE TABLE IF NOT EXISTS product_options (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    price REAL NOT NULL DEFAULT 0.00,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    updated_at DATETIME DEFAULT NULL,
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
 );
 
 -- Customers Table
@@ -50,6 +63,8 @@ CREATE TABLE IF NOT EXISTS stocks (
     sale_cost REAL NOT NULL DEFAULT 0.00,
     quantity INTEGER NOT NULL DEFAULT 0,
     status TEXT CHECK(status IN ('inStock', 'outStock', 'lowStock')) DEFAULT 'inStock',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    cooking_instructions TEXT DEFAULT NULL,
     sync_status TEXT CHECK(sync_status IN ('synced', 'pending', 'failed')) DEFAULT 'synced',
     created_at DATETIME NOT NULL DEFAULT (datetime('now')),
     updated_at DATETIME DEFAULT NULL,
@@ -115,6 +130,10 @@ CREATE TABLE IF NOT EXISTS sale_details (
     unit_price REAL NOT NULL DEFAULT 0.00,
     total_price REAL NOT NULL DEFAULT 0.00,
     unit_cost REAL NOT NULL DEFAULT 0.00,
+    base_price REAL NOT NULL DEFAULT 0.00,
+    extras TEXT DEFAULT NULL,
+    removed_ingredients TEXT DEFAULT NULL,
+    cooking_instructions TEXT DEFAULT NULL,
     sync_status TEXT CHECK(sync_status IN ('synced', 'pending', 'failed')) DEFAULT 'synced',
     created_at DATETIME NOT NULL DEFAULT (datetime('now')),
     updated_at DATETIME DEFAULT NULL,
@@ -165,6 +184,9 @@ CREATE TABLE IF NOT EXISTS cart (
     stock_id INTEGER NOT NULL,
     quantity INTEGER NOT NULL DEFAULT 1,
     unit_price REAL NOT NULL,
+    base_price REAL NOT NULL DEFAULT 0.00,
+    extras TEXT DEFAULT NULL,
+    removed_ingredients TEXT DEFAULT NULL,
     cooking_instructions TEXT DEFAULT NULL,
     created_at DATETIME NOT NULL DEFAULT (datetime('now')),
     updated_at DATETIME DEFAULT NULL,
@@ -175,6 +197,7 @@ CREATE TABLE IF NOT EXISTS cart (
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
 CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);
+CREATE INDEX IF NOT EXISTS idx_product_options_product ON product_options(product_id);
 CREATE INDEX IF NOT EXISTS idx_stocks_product ON stocks(product_id);
 CREATE INDEX IF NOT EXISTS idx_sales_customer ON sales(customer_id);
 CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(status);

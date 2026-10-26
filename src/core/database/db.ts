@@ -39,6 +39,16 @@ export const initDatabase = async () => {
     'ALTER TABLE sales ADD COLUMN cash_amount REAL DEFAULT NULL',
     'ALTER TABLE sales ADD COLUMN card_amount REAL DEFAULT NULL',
     'ALTER TABLE accounting ADD COLUMN category TEXT DEFAULT NULL',
+    'ALTER TABLE stocks ADD COLUMN cooking_instructions TEXT DEFAULT NULL',
+    'ALTER TABLE stocks ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1',
+    'ALTER TABLE sale_details ADD COLUMN cooking_instructions TEXT DEFAULT NULL',
+    'ALTER TABLE products ADD COLUMN ingredients TEXT DEFAULT NULL',
+    'ALTER TABLE cart ADD COLUMN base_price REAL NOT NULL DEFAULT 0',
+    'ALTER TABLE cart ADD COLUMN extras TEXT DEFAULT NULL',
+    'ALTER TABLE cart ADD COLUMN removed_ingredients TEXT DEFAULT NULL',
+    'ALTER TABLE sale_details ADD COLUMN base_price REAL NOT NULL DEFAULT 0',
+    'ALTER TABLE sale_details ADD COLUMN extras TEXT DEFAULT NULL',
+    'ALTER TABLE sale_details ADD COLUMN removed_ingredients TEXT DEFAULT NULL',
   ];
   for (const migration of migrations) {
     try {

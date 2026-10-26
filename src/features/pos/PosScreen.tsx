@@ -14,14 +14,15 @@ import {Colors} from '../../core/constants';
 import {CategoryRepository} from '../../core/database/repositories/CategoryRepository';
 import {ProductRepository} from '../../core/database/repositories/ProductRepository';
 import {StockRepository} from '../../core/database/repositories/StockRepository';
+import {ProductOptionRepository} from '../../core/database/repositories/ProductOptionRepository';
 import {useAppStore} from '../../store';
 import {CartRepository} from '../../core/database/repositories/CartRepository';
 import {SaleRepository} from '../../core/database/repositories/SaleRepository';
 import {SaleDetailRepository} from '../../core/database/repositories/SaleDetailRepository';
 import {CustomerRepository} from '../../core/database/repositories/CustomerRepository';
 import {SettingsRepository} from '../../core/database/repositories/SettingsRepository';
-import {Category, Product, Customer, Sale, SaleDetail} from '../../types';
-import {generateUUID, humanize} from '../../core/utils';
+import {Category, Product, Customer, Sale, SaleDetail, Stock, ProductOption} from '../../types';
+import {generateUUID, humanize, formatIngredientList, parseIngredientList, parseLineExtras} from '../../core/utils';
 import {useFocusEffect} from '@react-navigation/native';
 import InvoiceModal from '../../components/InvoiceModal';
 
@@ -53,6 +54,22 @@ const PosScreen = () => {
   const [invoiceSale, setInvoiceSale] = useState<Sale | null>(null);
   const [invoiceDetails, setInvoiceDetails] = useState<SaleDetail[]>([]);
   const [invoiceCustomerName, setInvoiceCustomerName] = useState<string | undefined>();
+  const [instructionModalVisible, setInstructionModalVisible] = useState(false);
+  const [editingCartItem, setEditingCartItem] = useState<any | null>(null);
+  const [instructionDraft, setInstructionDraft] = useState('');
+  const [stockPickerVisible, setStockPickerVisible] = useState(false);
+  const [stockPickerProduct, setStockPickerProduct] = useState<Product | null>(null);
+  const [stockPickerStocks, setStockPickerStocks] = useState<Stock[]>([]);
+  const [stockPickerCustomization, setStockPickerCustomization] = useState<{
+    removed: string[];
+    extras: ProductOption[];
+  }>({removed: [], extras: []});
+  const [customizeVisible, setCustomizeVisible] = useState(false);
+  const [customizeProduct, setCustomizeProduct] = useState<Product | null>(null);
+  const [customizeIngredients, setCustomizeIngredients] = useState<string[]>([]);
+  const [customizeExtras, setCustomizeExtras] = useState<ProductOption[]>([]);
+  const [removedIngredients, setRemovedIngredients] = useState<string[]>([]);
+  const [selectedExtras, setSelectedExtras] = useState<ProductOption[]>([]);
 
   useEffect(() => {
     loadData();
@@ -134,24 +151,187 @@ const PosScreen = () => {
     ]);
   };
 
-  const addToCart = async (product: Product) => {
-    const stock = await StockRepository.getByProductId(product.id);
-    if (!stock || stock.quantity <= 0) {
-      Alert.alert('Out of Stock', 'This product is out of stock');
-      return;
+  const mergeInstructions = (base?: string, extra?: string) => {
+    const current = (base || '').trim();
+    const added = (extra || '').trim();
+    if (!current) {
+      return added || undefined;
     }
+    if (!added || current.toLowerCase().includes(added.toLowerCase())) {
+      return current;
+    }
+    return `${current}; ${added}`;
+  };
+
+  const addStockToCart = async (
+    product: Product,
+    stock: Stock,
+    removed: string[] = [],
+    extras: ProductOption[] = [],
+  ) => {
+    const customInstruction = removed.map(item => `No ${item}`).join(', ');
+    const extrasTotal = extras.reduce(
+      (total, extra) => total + (Number(extra.price) || 0),
+      0,
+    );
+    const extraSnapshot = extras.map(extra => ({
+      id: extra.id,
+      name: extra.name,
+      price: extra.price,
+    }));
+
     await CartRepository.addItem({
       session_id: SESSION_ID,
       product_id: product.id,
       stock_id: stock.id,
       quantity: 1,
-      unit_price: stock.sale_cost,
-      cooking_instructions: undefined,
+      unit_price: stock.sale_cost + extrasTotal,
+      base_price: stock.sale_cost,
+      extras: extras.length > 0 ? JSON.stringify(extraSnapshot) : undefined,
+      removed_ingredients:
+        removed.length > 0 ? JSON.stringify(removed) : undefined,
+      cooking_instructions: mergeInstructions(
+        stock.cooking_instructions,
+        customInstruction || undefined,
+      ),
       created_at: '',
       updated_at: undefined,
     } as any);
     loadCart();
   };
+
+  const addToCart = async (
+    product: Product,
+    removed: string[] = [],
+    extras: ProductOption[] = [],
+  ) => {
+    const stocks = await StockRepository.getAllByProductId(product.id);
+    const available = stocks.filter(s => s.is_active !== 0 && s.quantity > 0);
+    if (available.length === 0) {
+      Alert.alert('Out of Stock', 'This product is out of stock');
+      return;
+    }
+    if (available.length === 1) {
+      await addStockToCart(product, available[0], removed, extras);
+      return;
+    }
+    setStockPickerProduct(product);
+    setStockPickerStocks(available);
+    setStockPickerCustomization({removed, extras});
+    setStockPickerVisible(true);
+  };
+
+  const openCustomize = async (product: Product) => {
+    const ingredients = parseIngredientList(product.ingredients);
+    let options: ProductOption[] = [];
+    try {
+      options = await ProductOptionRepository.getByProduct(product.id);
+    } catch (error) {
+      console.error('Load product extras error:', error);
+    }
+    if (ingredients.length === 0 && options.length === 0) {
+      await addToCart(product);
+      return;
+    }
+    setCustomizeProduct(product);
+    setCustomizeIngredients(ingredients);
+    setCustomizeExtras(options);
+    setRemovedIngredients([]);
+    setSelectedExtras([]);
+    setCustomizeVisible(true);
+  };
+
+  const closeCustomize = () => {
+    setCustomizeVisible(false);
+    setCustomizeProduct(null);
+    setCustomizeIngredients([]);
+    setCustomizeExtras([]);
+    setRemovedIngredients([]);
+    setSelectedExtras([]);
+  };
+
+  const toggleCustomizeIngredient = (ingredient: string) => {
+    setRemovedIngredients(current =>
+      current.includes(ingredient)
+        ? current.filter(item => item !== ingredient)
+        : [...current, ingredient],
+    );
+  };
+
+  const toggleCustomizeExtra = (option: ProductOption) => {
+    setSelectedExtras(current =>
+      current.some(extra => extra.id === option.id)
+        ? current.filter(extra => extra.id !== option.id)
+        : [...current, option],
+    );
+  };
+
+  const confirmCustomize = async () => {
+    if (!customizeProduct) {
+      return;
+    }
+    const product = customizeProduct;
+    const removed = [...removedIngredients];
+    const extras = [...selectedExtras];
+    closeCustomize();
+    await addToCart(product, removed, extras);
+  };
+
+  const closeStockPicker = () => {
+    setStockPickerVisible(false);
+    setStockPickerProduct(null);
+    setStockPickerStocks([]);
+    setStockPickerCustomization({removed: [], extras: []});
+  };
+
+  const selectStock = async (stock: Stock) => {
+    if (!stockPickerProduct) {
+      return;
+    }
+    const product = stockPickerProduct;
+    const customization = stockPickerCustomization;
+    closeStockPicker();
+    await addStockToCart(
+      product,
+      stock,
+      customization.removed,
+      customization.extras,
+    );
+  };
+
+  const getProductName = (item: any) =>
+    (allProducts.find(p => p.id === item.product_id) ||
+      products.find(p => p.id === item.product_id))?.name || 'Item';
+
+  const openInstructionEditor = (item: any) => {
+    setEditingCartItem(item);
+    setInstructionDraft(item.cooking_instructions || '');
+    setInstructionModalVisible(true);
+  };
+
+  const closeInstructionEditor = () => {
+    setInstructionModalVisible(false);
+    setEditingCartItem(null);
+    setInstructionDraft('');
+  };
+
+  const saveInstruction = async () => {
+    if (!editingCartItem) {
+      return;
+    }
+    await CartRepository.updateCookingInstructions(
+      editingCartItem.id,
+      instructionDraft.trim() || null,
+    );
+    closeInstructionEditor();
+    loadCart();
+  };
+
+  const getCookingSummary = () =>
+    cart
+      .filter(item => item.cooking_instructions)
+      .map(item => `${getProductName(item)}: ${item.cooking_instructions}`)
+      .join('; ') || null;
 
   const calculateSubtotal = () => {
     let total = 0;
@@ -211,15 +391,15 @@ const PosScreen = () => {
   });
 
   const getCartCosts = async () => {
-    const itemCosts: {[productId: number]: number} = {};
+    const lineCosts: {[cartItemId: number]: number} = {};
     let costTotal = 0;
     for (const item of cart) {
-      const stock = await StockRepository.getByProductId(item.product_id);
+      const stock = await StockRepository.getById(item.stock_id);
       const unitCost = stock?.net_cost ?? 0;
-      itemCosts[item.product_id] = unitCost;
+      lineCosts[item.id] = unitCost;
       costTotal += unitCost * item.quantity;
     }
-    return {itemCosts, costTotal};
+    return {lineCosts, costTotal};
   };
 
   const handleSaveOrder = async () => {
@@ -234,7 +414,7 @@ const PosScreen = () => {
       const v = (subtotal * (parseFloat(vat) || 0)) / 100;
       const total = subtotal - disc + t + v;
       const split = getSplitAmounts();
-      const {itemCosts, costTotal} = await getCartCosts();
+      const {lineCosts, costTotal} = await getCartCosts();
 
       const saleId = await SaleRepository.create({
         uuid: generateUUID(),
@@ -251,6 +431,7 @@ const PosScreen = () => {
         postcode: saleType === 'takeAway' ? postcode || null : null,
         address: saleType === 'takeAway' ? address || null : null,
         pickup_time: saleType === 'pickUp' ? pickupTime || null : null,
+        cooking_instructions: getCookingSummary(),
         status: 'saveSale',
         payment_method: paymentMethod,
         cash_amount: paymentMethod === 'split' ? split.cash : null,
@@ -270,7 +451,11 @@ const PosScreen = () => {
           quantity: item.quantity,
           unit_price: item.unit_price,
           total_price: item.unit_price * item.quantity,
-          unit_cost: itemCosts[item.product_id] || 0,
+          unit_cost: lineCosts[item.id] || 0,
+          base_price: item.base_price ?? item.unit_price,
+          extras: item.extras || undefined,
+          removed_ingredients: item.removed_ingredients || undefined,
+          cooking_instructions: item.cooking_instructions || null,
           sync_status: 'pending',
           created_at: '',
           updated_at: undefined,
@@ -319,7 +504,7 @@ const PosScreen = () => {
     }
 
     try {
-      const {itemCosts, costTotal} = await getCartCosts();
+      const {lineCosts, costTotal} = await getCartCosts();
       const customerName = selectedCustomer
         ? customers.find(c => c.id === selectedCustomer)?.name
         : undefined;
@@ -339,6 +524,7 @@ const PosScreen = () => {
         postcode: saleType === 'takeAway' ? postcode || null : null,
         address: saleType === 'takeAway' ? address || null : null,
         pickup_time: saleType === 'pickUp' ? pickupTime || null : null,
+        cooking_instructions: getCookingSummary(),
         status: 'completed',
         payment_method: paymentMethod,
         cash_amount: paymentMethod === 'split' ? split.cash : null,
@@ -358,12 +544,16 @@ const PosScreen = () => {
           quantity: item.quantity,
           unit_price: item.unit_price,
           total_price: item.unit_price * item.quantity,
-          unit_cost: itemCosts[item.product_id] || 0,
+          unit_cost: lineCosts[item.id] || 0,
+          base_price: item.base_price ?? item.unit_price,
+          extras: item.extras || undefined,
+          removed_ingredients: item.removed_ingredients || undefined,
+          cooking_instructions: item.cooking_instructions || null,
           sync_status: 'pending',
           created_at: '',
           updated_at: undefined,
         } as any);
-        const stock = await StockRepository.getByProductId(item.product_id);
+        const stock = await StockRepository.getById(item.stock_id);
         if (stock) {
           await StockRepository.updateQuantity(stock.id, stock.quantity - item.quantity);
         }
@@ -437,8 +627,13 @@ const PosScreen = () => {
             numColumns={2}
             keyExtractor={item => item.id.toString()}
             renderItem={({item}) => (
-              <TouchableOpacity style={styles.productCard} onPress={() => addToCart(item)}>
+              <TouchableOpacity style={styles.productCard} onPress={() => openCustomize(item)}>
                 <Text style={styles.productName}>{item.name}</Text>
+                {!!item.ingredients && (
+                  <Text style={styles.productIngredients} numberOfLines={2}>
+                    {formatIngredientList(item.ingredients)}
+                  </Text>
+                )}
               </TouchableOpacity>
             )}
           />
@@ -456,27 +651,45 @@ const PosScreen = () => {
             </Text>
           </TouchableOpacity>
           <FlatList
+            style={styles.cartList}
             data={cart}
             keyExtractor={item => item.id.toString()}
-            renderItem={({item}) => (
-              <View style={styles.cartItem}>
-                <View style={styles.cartItemInfo}>
-                  <Text style={styles.cartItemName}>
-                    {(allProducts.find(p => p.id === item.product_id) ||
-                      products.find(p => p.id === item.product_id))?.name || 'Item'}
-                  </Text>
-                  <Text style={styles.cartItemPrice}>
-                    {item.quantity} x {currency.symbol}{item.unit_price.toFixed(2)}
-                  </Text>
+            renderItem={({item}) => {
+              const extras = parseLineExtras(item.extras);
+              return (
+                <View style={styles.cartItem}>
+                  <View style={styles.cartItemInfo}>
+                    <Text style={styles.cartItemName}>{getProductName(item)}</Text>
+                    <Text style={styles.cartItemPrice}>
+                      {item.quantity} x {currency.symbol}{item.unit_price.toFixed(2)} · Batch #{item.stock_id}
+                    </Text>
+                    {extras.length > 0 && (
+                      <Text style={styles.cartItemExtras}>
+                        {extras
+                          .map(
+                            extra =>
+                              `${extra.name} +${currency.symbol}${extra.price.toFixed(2)}`,
+                          )
+                          .join(' · ')}
+                      </Text>
+                    )}
+                    <TouchableOpacity onPress={() => openInstructionEditor(item)}>
+                      <Text style={styles.cartItemInstruction}>
+                        {item.cooking_instructions
+                          ? `📝 ${item.cooking_instructions}`
+                          : '+ Add cooking instruction'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.cartItemTotal}>{currency.symbol}{(item.unit_price * item.quantity).toFixed(2)}</Text>
+                  <TouchableOpacity
+                    style={styles.removeItemBtn}
+                    onPress={() => removeFromCart(item.id)}>
+                    <Text style={styles.removeItemText}>✕</Text>
+                  </TouchableOpacity>
                 </View>
-                <Text style={styles.cartItemTotal}>{currency.symbol}{(item.unit_price * item.quantity).toFixed(2)}</Text>
-                <TouchableOpacity
-                  style={styles.removeItemBtn}
-                  onPress={() => removeFromCart(item.id)}>
-                  <Text style={styles.removeItemText}>✕</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+              );
+            }}
             ListEmptyComponent={<Text style={styles.emptyCart}>Cart is empty</Text>}
           />
           <View style={styles.calcRow}>
@@ -646,6 +859,152 @@ const PosScreen = () => {
         </View>
       </Modal>
 
+      <Modal visible={instructionModalVisible} animationType="slide" transparent={true}>
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Cooking Instruction</Text>
+            {editingCartItem && (
+              <Text style={styles.modalSubtitle}>{getProductName(editingCartItem)}</Text>
+            )}
+            <TextInput
+              style={[styles.input, styles.multilineInput]}
+              placeholder="e.g. No onion, extra spicy"
+              value={instructionDraft}
+              onChangeText={setInstructionDraft}
+              multiline
+              autoFocus
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.cancelButton} onPress={closeInstructionEditor}>
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.confirmButton} onPress={saveInstruction}>
+                <Text style={styles.confirmButtonText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={customizeVisible} animationType="slide" transparent={true}>
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Customize</Text>
+            {customizeProduct && (
+              <Text style={styles.modalSubtitle}>{customizeProduct.name}</Text>
+            )}
+            <Text style={styles.modalHint}>
+              {customizeIngredients.length > 0 && customizeExtras.length > 0
+                ? 'Tap an ingredient to remove it, or add an extra.'
+                : customizeIngredients.length > 0
+                ? 'All ingredients are included. Tap one to remove it.'
+                : 'Tap an extra to add it to this item.'}
+            </Text>
+            <ScrollView
+              style={styles.modalScroll}
+              contentContainerStyle={styles.modalScrollContent}
+              keyboardShouldPersistTaps="handled">
+              {customizeIngredients.length > 0 && (
+                <Text style={styles.customizeSection}>Ingredients</Text>
+              )}
+              {customizeIngredients.map(ingredient => {
+                const removed = removedIngredients.includes(ingredient);
+                return (
+                  <TouchableOpacity
+                    key={ingredient}
+                    style={[styles.ingredientRow, removed && styles.ingredientRowRemoved]}
+                    onPress={() => toggleCustomizeIngredient(ingredient)}>
+                    <View style={[styles.ingredientCheck, removed && styles.ingredientCheckRemoved]}>
+                      {!removed && <Text style={styles.ingredientCheckText}>✓</Text>}
+                    </View>
+                    <Text style={[styles.ingredientName, removed && styles.ingredientNameRemoved]}>
+                      {removed ? `No ${ingredient}` : ingredient}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+              {customizeExtras.length > 0 && (
+                <Text style={styles.customizeSection}>Extras</Text>
+              )}
+              {customizeExtras.map(option => {
+                const selected = selectedExtras.some(extra => extra.id === option.id);
+                return (
+                  <TouchableOpacity
+                    key={option.id}
+                    style={[styles.ingredientRow, selected && styles.extraRowSelected]}
+                    onPress={() => toggleCustomizeExtra(option)}>
+                    <View
+                      style={[
+                        styles.ingredientCheck,
+                        !selected && styles.ingredientCheckEmpty,
+                      ]}>
+                      {selected && <Text style={styles.ingredientCheckText}>✓</Text>}
+                    </View>
+                    <Text style={styles.ingredientName}>{option.name}</Text>
+                    <Text style={styles.extraPrice}>
+                      +{currency.symbol}{option.price.toFixed(2)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            {selectedExtras.length > 0 && (
+              <Text style={styles.customizeExtraTotal}>
+                Extras: +{currency.symbol}
+                {selectedExtras
+                  .reduce((total, extra) => total + extra.price, 0)
+                  .toFixed(2)}
+              </Text>
+            )}
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.cancelButton} onPress={closeCustomize}>
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.confirmButton} onPress={confirmCustomize}>
+                <Text style={styles.confirmButtonText}>Add to Cart</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={stockPickerVisible} animationType="slide" transparent={true}>
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Select Stock Batch</Text>
+            {stockPickerProduct && (
+              <Text style={styles.modalSubtitle}>{stockPickerProduct.name}</Text>
+            )}
+            <Text style={styles.modalHint}>
+              Choose the batch being sold. Its buy and sale price are used for this order.
+            </Text>
+            <FlatList
+              data={stockPickerStocks}
+              keyExtractor={item => item.id.toString()}
+              style={styles.stockPickerList}
+              renderItem={({item}) => (
+                <TouchableOpacity
+                  style={styles.stockPickerItem}
+                  onPress={() => selectStock(item)}>
+                  <View style={styles.stockPickerInfo}>
+                    <Text style={styles.stockPickerSale}>
+                      Sale: {currency.symbol}{item.sale_cost.toFixed(2)}
+                    </Text>
+                    <Text style={styles.stockPickerMeta}>
+                      Buy: {currency.symbol}{item.net_cost.toFixed(2)} · Stock #{item.id}
+                    </Text>
+                  </View>
+                  <Text style={styles.stockPickerQty}>{item.quantity} left</Text>
+                </TouchableOpacity>
+              )}
+            />
+            <TouchableOpacity style={styles.cancelButton} onPress={closeStockPicker}>
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <InvoiceModal
         visible={invoiceVisible}
         sale={invoiceSale}
@@ -762,11 +1121,20 @@ const styles = StyleSheet.create({
     color: Colors.text,
     textAlign: 'center',
   },
+  productIngredients: {
+    fontSize: 10,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginTop: 3,
+  },
   cartHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,
+  },
+  cartList: {
+    flex: 1,
   },
   cartTitle: {
     fontSize: 18,
@@ -802,6 +1170,17 @@ const styles = StyleSheet.create({
   cartItemPrice: {
     fontSize: 12,
     color: Colors.textSecondary,
+  },
+  cartItemExtras: {
+    fontSize: 11,
+    color: Colors.secondary,
+    marginTop: 2,
+    fontWeight: 'bold',
+  },
+  cartItemInstruction: {
+    fontSize: 11,
+    color: Colors.primary,
+    marginTop: 2,
   },
   cartItemTotal: {
     fontSize: 14,
@@ -911,6 +1290,37 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textSecondary,
   },
+  stockPickerList: {
+    maxHeight: 300,
+    marginBottom: 8,
+  },
+  stockPickerItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  stockPickerInfo: {
+    flex: 1,
+  },
+  stockPickerSale: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: Colors.text,
+  },
+  stockPickerMeta: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  stockPickerQty: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: Colors.primary,
+    marginLeft: 8,
+  },
   modalContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -932,10 +1342,86 @@ const styles = StyleSheet.create({
   modalScrollContent: {
     paddingBottom: 4,
   },
+  ingredientRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  ingredientRowRemoved: {
+    backgroundColor: '#fff5f5',
+  },
+  ingredientCheck: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  ingredientCheckRemoved: {
+    backgroundColor: Colors.surface,
+    borderColor: Colors.error,
+  },
+  ingredientCheckText: {
+    color: Colors.surface,
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  ingredientName: {
+    fontSize: 15,
+    color: Colors.text,
+    flex: 1,
+  },
+  ingredientNameRemoved: {
+    color: Colors.error,
+  },
+  ingredientCheckEmpty: {
+    backgroundColor: Colors.surface,
+    borderColor: Colors.primary,
+  },
+  extraRowSelected: {
+    backgroundColor: '#f1f8e9',
+  },
+  extraPrice: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: Colors.secondary,
+    marginLeft: 8,
+  },
+  customizeSection: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: Colors.textSecondary,
+    textTransform: 'uppercase',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  customizeExtraTotal: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: Colors.primary,
+    marginTop: 8,
+  },
   modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
     color: Colors.primary,
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    marginBottom: 8,
+  },
+  modalHint: {
+    fontSize: 12,
+    color: Colors.textSecondary,
     marginBottom: 8,
   },
   modalTotal: {
@@ -979,6 +1465,10 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     padding: 12,
     marginBottom: 8,
+  },
+  multilineInput: {
+    minHeight: 80,
+    textAlignVertical: 'top',
   },
   splitRow: {
     flexDirection: 'row',

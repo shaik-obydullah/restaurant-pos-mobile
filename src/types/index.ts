@@ -14,10 +14,27 @@ export interface Product {
   name: string;
   category_id: number;
   image?: string;
+  ingredients?: string;
   status: 'active' | 'inactive';
   sync_status: 'synced' | 'pending' | 'failed';
   created_at: string;
   updated_at?: string;
+}
+
+export interface ProductOption {
+  id: number;
+  product_id: number;
+  name: string;
+  price: number;
+  sort_order: number;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface LineExtra {
+  id?: number;
+  name: string;
+  price: number;
 }
 
 export interface Customer {
@@ -41,6 +58,8 @@ export interface Stock {
   sale_cost: number;
   quantity: number;
   status: 'inStock' | 'outStock' | 'lowStock';
+  is_active: number;
+  cooking_instructions?: string;
   sync_status: 'synced' | 'pending' | 'failed';
   created_at: string;
   updated_at?: string;
@@ -100,6 +119,10 @@ export interface SaleDetail {
   unit_price: number;
   total_price: number;
   unit_cost: number;
+  base_price?: number;
+  extras?: string;
+  removed_ingredients?: string;
+  cooking_instructions?: string;
   sync_status: 'synced' | 'pending' | 'failed';
   created_at: string;
   updated_at?: string;
@@ -112,6 +135,9 @@ export interface CartItem {
   stock_id: number;
   quantity: number;
   unit_price: number;
+  base_price?: number;
+  extras?: string;
+  removed_ingredients?: string;
   cooking_instructions?: string;
   created_at: string;
   updated_at?: string;

@@ -6,7 +6,7 @@ import {SaleDetailRepository} from '../../core/database/repositories/SaleDetailR
 import {CartRepository} from '../../core/database/repositories/CartRepository';
 import {Sale, SaleDetail} from '../../types';
 import {useAppStore} from '../../store';
-import {humanize} from '../../core/utils';
+import {humanize, parseLineExtras} from '../../core/utils';
 import {useFocusEffect, useNavigation} from '@react-navigation/native';
 
 const POS_SESSION_ID = 'pos_session_default';
@@ -51,7 +51,10 @@ const OrdersScreen = () => {
             stock_id: detail.stock_id,
             quantity: detail.quantity,
             unit_price: detail.unit_price,
-            cooking_instructions: undefined,
+            base_price: detail.base_price ?? detail.unit_price,
+            extras: detail.extras || undefined,
+            removed_ingredients: detail.removed_ingredients || undefined,
+            cooking_instructions: detail.cooking_instructions || undefined,
             updated_at: undefined,
           } as any);
         }
@@ -198,14 +201,32 @@ const OrdersScreen = () => {
                     </>
                   )}
                   <Text style={styles.sectionTitle}>Items</Text>
-                  {details.map(detail => (
-                    <View key={detail.id} style={styles.detailItem}>
-                      <Text style={styles.detailItemName}>{detail.product_name}</Text>
-                      <Text style={styles.detailItemQty}>
-                        {detail.quantity} x {currency.symbol}{detail.unit_price.toFixed(2)} = {currency.symbol}{detail.total_price.toFixed(2)}
-                      </Text>
-                    </View>
-                  ))}
+                  {details.map(detail => {
+                    const extras = parseLineExtras(detail.extras);
+                    return (
+                      <View key={detail.id} style={styles.detailItem}>
+                        <Text style={styles.detailItemName}>{detail.product_name}</Text>
+                        <Text style={styles.detailItemQty}>
+                          {detail.quantity} x {currency.symbol}{detail.unit_price.toFixed(2)} = {currency.symbol}{detail.total_price.toFixed(2)}
+                        </Text>
+                        {extras.length > 0 && (
+                          <Text style={styles.detailItemExtras}>
+                            {extras
+                              .map(
+                                extra =>
+                                  `${extra.name} +${currency.symbol}${extra.price.toFixed(2)}`,
+                              )
+                              .join(' · ')}
+                          </Text>
+                        )}
+                        {!!detail.cooking_instructions && (
+                          <Text style={styles.detailItemInstruction}>
+                            📝 {detail.cooking_instructions}
+                          </Text>
+                        )}
+                      </View>
+                    );
+                  })}
                   <View style={styles.divider} />
                   <Text style={styles.detailText}>Subtotal: {currency.symbol}{selectedSale.net_price.toFixed(2)}</Text>
                   <Text style={styles.detailText}>Discount: {currency.symbol}{selectedSale.discount_amount.toFixed(2)}</Text>
@@ -400,6 +421,17 @@ const styles = StyleSheet.create({
   detailItemQty: {
     fontSize: 12,
     color: Colors.textSecondary,
+  },
+  detailItemInstruction: {
+    fontSize: 12,
+    color: Colors.primary,
+    marginTop: 2,
+  },
+  detailItemExtras: {
+    fontSize: 12,
+    color: Colors.secondary,
+    marginTop: 2,
+    fontWeight: 'bold',
   },
   divider: {
     height: 1,
