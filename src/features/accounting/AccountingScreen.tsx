@@ -414,7 +414,7 @@ const AccountingScreen = () => {
         <Text style={styles.salesTitle}>Order Sales · {periodLabel}</Text>
         <View style={styles.salesRow}>
           <View style={styles.salesItem}>
-            <Text style={styles.summaryLabel}>Sales (net)</Text>
+            <Text style={styles.summaryLabel}>Sales Income</Text>
             <Text style={[styles.salesValue, styles.inText]}>
               {currency.symbol}{salesSummary.salesIncome.toFixed(2)}
             </Text>
@@ -496,6 +496,7 @@ const AccountingScreen = () => {
             const sale = item.sale;
             const itemLabel =
               sale.item_quantity === 1 ? '1 item' : `${sale.item_quantity} items`;
+            const saleProfit = sale.net_price - (sale.cost_of_goods || 0);
             return (
               <View style={styles.item}>
                 <View style={styles.itemInfo}>
@@ -514,7 +515,14 @@ const AccountingScreen = () => {
                   <Text style={[styles.amount, styles.inText]}>
                     +{currency.symbol}{item.amount.toFixed(2)}
                   </Text>
-                  <Text style={styles.netHint}>net</Text>
+                  <Text style={styles.incomeHint}>income</Text>
+                  <Text
+                    style={[
+                      styles.profitHint,
+                      saleProfit >= 0 ? styles.inText : styles.outText,
+                    ]}>
+                    GP {currency.symbol}{saleProfit.toFixed(2)}
+                  </Text>
                 </View>
               </View>
             );
@@ -872,9 +880,14 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     overflow: 'hidden',
   },
-  netHint: {
+  incomeHint: {
     fontSize: 11,
     color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  profitHint: {
+    fontSize: 11,
+    fontWeight: '600',
     marginTop: 2,
   },
   inText: {

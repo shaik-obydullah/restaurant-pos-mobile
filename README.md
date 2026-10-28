@@ -120,7 +120,7 @@ Inactive products are hidden from the POS product list.
 - Date filters: all time, today, last 7 days, this month, and custom range
 - Automatic sales income from completed sales
 - Cost of goods from cost snapshots captured at checkout
-- Gross profit calculation
+- Gross profit calculation, including gross profit per order in the entries list
 - Manual ledger balance
 
 ### Settings

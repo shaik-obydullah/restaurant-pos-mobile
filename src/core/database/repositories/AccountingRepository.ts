@@ -20,7 +20,7 @@ export interface SalesEntry {
   id: number;
   created_at: string;
   net_price: number;
-  grand_total: number;
+  cost_of_goods: number;
   vat_amount: number;
   tax_amount: number;
   discount_amount: number;
@@ -96,7 +96,7 @@ export class AccountingRepository {
          s.id,
          s.created_at,
          s.net_price,
-         s.grand_total,
+         s.buy_price AS cost_of_goods,
          s.vat_amount,
          s.tax_amount,
          s.discount_amount,
